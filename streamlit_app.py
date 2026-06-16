@@ -359,7 +359,7 @@ def engineer_features(_df: pd.DataFrame):
     X["businesstype"]            = X["businesstype"].fillna("Unknown")
     X["businessage"]             = X["businessage"].fillna("Unknown")
 
-    y = X.pop("is_default")
+    y = X.pop("is_default").astype(int)  # ensure int keys in classification_report
     return X, y
 
 
@@ -433,8 +433,9 @@ def show_model_results(label: str, pipeline, X_test, y_test, color: str):
     y_pred  = pipeline.predict(X_test)
     y_probs = pipeline.predict_proba(X_test)[:, 1]
     auc     = roc_auc_score(y_test, y_probs)
-    report  = classification_report(y_test, y_pred, output_dict=True)
-    cm      = confusion_matrix(y_test, y_pred)
+    y_test_int = y_test.astype(int)  # normalise to int so report keys are always 0/1
+    report  = classification_report(y_test_int, y_pred.astype(int), output_dict=True)
+    cm      = confusion_matrix(y_test_int, y_pred.astype(int))
 
     # KPIs
     c1, c2, c3, c4 = st.columns(4)
@@ -513,8 +514,9 @@ def show_threshold_analysis(y_test, y_probs):
     st.info(f"**Mathematically optimal threshold (G-Mean / J-Statistic): `{optimal_threshold:.4f}`**")
 
     custom_preds = (y_probs >= optimal_threshold).astype(int)
-    report = classification_report(y_test, custom_preds, output_dict=True)
-    cm     = confusion_matrix(y_test, custom_preds)
+    y_test_int   = np.array(y_test).astype(int)  # normalise to int so report keys are always 0/1
+    report = classification_report(y_test_int, custom_preds, output_dict=True)
+    cm     = confusion_matrix(y_test_int, custom_preds)
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Precision (Default)", f"{_get_class_metrics(report, 'precision'):.3f}")
