@@ -416,6 +416,17 @@ def train_tuned_xgb(_X_train, _y_train):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Safe metric extractor — handles any key format sklearn may produce
+# ─────────────────────────────────────────────────────────────────────────────
+def _get_class_metrics(report: dict, metric: str) -> float:
+    """Try every possible key sklearn uses for the positive class."""
+    for key in [1, 1.0, "1", "1.0", True]:
+        if key in report and metric in report[key]:
+            return report[key][metric]
+    return 0.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Evaluation helper
 # ─────────────────────────────────────────────────────────────────────────────
 def show_model_results(label: str, pipeline, X_test, y_test, color: str):
@@ -428,9 +439,9 @@ def show_model_results(label: str, pipeline, X_test, y_test, color: str):
     # KPIs
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("ROC-AUC",  f"{auc:.4f}")
-    c2.metric("Precision (Default)", f"{report['1.0']['precision']:.3f}")
-    c3.metric("Recall (Default)",    f"{report['1.0']['recall']:.3f}")
-    c4.metric("F1 (Default)",        f"{report['1.0']['f1-score']:.3f}")
+    c2.metric("Precision (Default)", f"{_get_class_metrics(report, 'precision'):.3f}")
+    c3.metric("Recall (Default)",    f"{_get_class_metrics(report, 'recall'):.3f}")
+    c4.metric("F1 (Default)",        f"{_get_class_metrics(report, 'f1-score'):.3f}")
 
     col_a, col_b = st.columns(2)
 
@@ -506,9 +517,9 @@ def show_threshold_analysis(y_test, y_probs):
     cm     = confusion_matrix(y_test, custom_preds)
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Precision (Default)", f"{report['1']['precision']:.3f}")
-    c2.metric("Recall (Default)",    f"{report['1']['recall']:.3f}")
-    c3.metric("F1 (Default)",        f"{report['1']['f1-score']:.3f}")
+    c1.metric("Precision (Default)", f"{_get_class_metrics(report, 'precision'):.3f}")
+    c2.metric("Recall (Default)",    f"{_get_class_metrics(report, 'recall'):.3f}")
+    c3.metric("F1 (Default)",        f"{_get_class_metrics(report, 'f1-score'):.3f}")
 
     col_a, col_b = st.columns(2)
     with col_a:
