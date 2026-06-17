@@ -592,11 +592,12 @@ try:
     # ─────────────────────────────────────────────────────────────────────────────
     # TABS
     # ─────────────────────────────────────────────────────────────────────────────
-    tab_portfolio, tab_geo, tab_model, tab_features = st.tabs([
+    tab_portfolio, tab_geo, tab_model, tab_features, tab_update = st.tabs([
         "📊 Portfolio Overview",
         "🗺️ Geographic Risk",
         "🤖 ML Models",
         "📈 Feature Importance",
+        "🔄 Model Update",
     ])
 
 
@@ -866,6 +867,209 @@ try:
                     importance_df.sort_values("Importance", ascending=False).reset_index(drop=True),
                     use_container_width=True,
                 )
+
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # TAB 5 — Incremental Model Update
+    # ═══════════════════════════════════════════════════════════════════════════════
+    with tab_update:
+        st.markdown('<div class="section-header">Incremental Model Update — Production Mode</div>', unsafe_allow_html=True)
+
+        st.info(
+            """
+            **Why incremental updates?** The post-2020 economy (COVID, rate hikes, PPP distortions) created
+            fundamentally different credit dynamics. Rather than retraining from scratch on millions of
+            combined rows, XGBoost’s native warm-start lets new trees *build on top of* your existing
+            2010–2019 model — preserving historical patterns while adapting to modern risk signals.
+
+            The **TargetEncoder is kept frozen** (it was fitted on 2010–2019 data). Only the
+            XGBoost booster grows new trees on the new data.
+            """
+        )
+
+        col_up1, col_up2 = st.columns(2)
+        with col_up1:
+            st.markdown("##### ① Load Existing Pipeline")
+            uploaded_pkl = st.file_uploader(
+                "Upload trained pipeline (.pkl)",
+                type=["pkl"],
+                key="pkl_uploader",
+                help="Download this from the ML Models tab after training.",
+            )
+        with col_up2:
+            st.markdown("##### ② Upload New Data")
+            uploaded_new_csv = st.file_uploader(
+                "Upload new CSV (FY2020–Present)",
+                type=["csv"],
+                key="new_csv_uploader",
+                help="FOIA 7(a) dataset for post-2019 fiscal years.",
+            )
+
+        if uploaded_pkl is not None and uploaded_new_csv is not None:
+            st.markdown("##### ③ Configure Update")
+            cfg1, cfg2 = st.columns(2)
+            with cfg1:
+                n_new_rounds = st.slider(
+                    "Additional boosting rounds",
+                    min_value=10, max_value=300, value=50, step=10,
+                    help="New trees to grow on top of the existing booster. Start conservatively (50).",
+                )
+            with cfg2:
+                holdout_pct = st.slider(
+                    "Holdout % for evaluation",
+                    min_value=10, max_value=30, value=20, step=5,
+                ) / 100
+
+            if st.button("🚀 Run Incremental Update", type="primary"):
+                try:
+                    # 1. Load existing pipeline
+                    with st.spinner("Loading existing pipeline…"):
+                        pkl_bytes = uploaded_pkl.read()
+                        existing_pipeline = joblib.load(io.BytesIO(pkl_bytes))
+
+                    # Validate it has the expected steps
+                    if "preprocessor" not in existing_pipeline.named_steps or \
+                       "classifier" not in existing_pipeline.named_steps:
+                        st.error("The uploaded .pkl does not look like an SBA pipeline — expected steps: preprocessor, classifier.")
+                        st.stop()
+
+                    # 2. Load & engineer new data
+                    with st.spinner("Loading and engineering new data…"):
+                        new_csv_bytes = uploaded_new_csv.read()
+                        df_new_raw = load_and_clean(new_csv_bytes)
+                        X_new, y_new = engineer_features(df_new_raw)
+
+                    st.info(
+                        f"New data: **{len(X_new):,} rows** · "
+                        f"Default rate: **{y_new.mean()*100:.2f}%** · "
+                        f"Features: **{X_new.shape[1]}**"
+                    )
+
+                    # 3. Train/test split on new data
+                    X_new_tr, X_new_te, y_new_tr, y_new_te = train_test_split(
+                        X_new, y_new, test_size=holdout_pct, stratify=y_new, random_state=42
+                    )
+
+                    # 4. Benchmark BEFORE update
+                    with st.spinner("Benchmarking existing model on new holdout…"):
+                        y_probs_before = existing_pipeline.predict_proba(X_new_te)[:, 1]
+                        auc_before = roc_auc_score(y_new_te, y_probs_before)
+
+                    # 5. Incremental update — bypass the pipeline to call .fit() with xgb_model
+                    with st.spinner(f"Growing {n_new_rounds} new trees on new data…"):
+                        preprocessor = existing_pipeline.named_steps["preprocessor"]
+                        xgb_clf     = existing_pipeline.named_steps["classifier"]
+
+                        # Transform (NOT fit_transform) — reuse the frozen TargetEncoder
+                        X_new_tr_t = preprocessor.transform(X_new_tr)
+                        X_new_te_t = preprocessor.transform(X_new_te)
+
+                        # Warm-start: existing booster is the foundation for new trees
+                        xgb_clf.set_params(n_estimators=xgb_clf.n_estimators + n_new_rounds)
+                        xgb_clf.fit(
+                            X_new_tr_t, y_new_tr,
+                            xgb_model=xgb_clf.get_booster(),
+                        )
+
+                    # 6. Evaluate AFTER update
+                    y_probs_after = xgb_clf.predict_proba(X_new_te_t)[:, 1]
+                    auc_after = roc_auc_score(y_new_te, y_probs_after)
+                    delta_auc = auc_after - auc_before
+
+                    # 7. Display results
+                    st.markdown("---")
+                    st.markdown("#### 📊 Before vs. After (holdout of new data)")
+
+                    mc1, mc2, mc3, mc4 = st.columns(4)
+                    mc1.metric("ROC-AUC Before", f"{auc_before:.4f}")
+                    mc2.metric("ROC-AUC After",  f"{auc_after:.4f}",
+                               delta=f"{delta_auc:+.4f}",
+                               delta_color="normal" if delta_auc >= 0 else "inverse")
+                    mc3.metric("New Trees Added", f"{n_new_rounds}")
+                    mc4.metric("Total Trees", f"{xgb_clf.n_estimators}")
+
+                    # ROC comparison
+                    fpr_b, tpr_b, _ = roc_curve(y_new_te, y_probs_before)
+                    fpr_a, tpr_a, _ = roc_curve(y_new_te, y_probs_after)
+
+                    fig_roc_cmp = go.Figure()
+                    fig_roc_cmp.add_trace(go.Scatter(
+                        x=fpr_b, y=tpr_b, mode="lines",
+                        name=f"Before update (AUC={auc_before:.4f})",
+                        line=dict(color="#94a3b8", width=2, dash="dash"),
+                    ))
+                    fig_roc_cmp.add_trace(go.Scatter(
+                        x=fpr_a, y=tpr_a, mode="lines",
+                        name=f"After update (AUC={auc_after:.4f})",
+                        line=dict(color="#a78bfa", width=2.5),
+                        fill="tozeroy", fillcolor="rgba(124,58,237,0.12)",
+                    ))
+                    fig_roc_cmp.add_trace(go.Scatter(
+                        x=[0, 1], y=[0, 1], mode="lines",
+                        line=dict(color="gray", dash="dash"), showlegend=False,
+                    ))
+                    fig_roc_cmp.update_layout(
+                        title="ROC Curve: Before vs. After Incremental Update",
+                        xaxis_title="False Positive Rate",
+                        yaxis_title="True Positive Rate",
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        font_color="white",
+                        legend=dict(bgcolor="rgba(0,0,0,0)"),
+                        margin=dict(l=10, r=10, t=50, b=10),
+                    )
+                    st.plotly_chart(fig_roc_cmp, use_container_width=True)
+
+                    # 8. Download updated pipeline
+                    st.markdown("---")
+                    if delta_auc >= 0:
+                        st.success(
+                            f"✅ Model improved by **{delta_auc:+.4f} AUC** on post-2019 data. "
+                            f"Download the updated pipeline below."
+                        )
+                    else:
+                        st.warning(
+                            f"⚠️ AUC decreased by {abs(delta_auc):.4f} on new data. "
+                            "The new data may be too small or structurally different. "
+                            "Consider more rounds or retraining from scratch."
+                        )
+
+                    upd_buffer = io.BytesIO()
+                    joblib.dump(existing_pipeline, upd_buffer)
+                    upd_buffer.seek(0)
+                    st.download_button(
+                        label="⬇️ Download Updated Pipeline (.pkl)",
+                        data=upd_buffer,
+                        file_name="sba_loan_xgboost_pipeline_updated.pkl",
+                        mime="application/octet-stream",
+                    )
+                    st.caption(
+                        f"ℹ️ TargetEncoder kept frozen (fitted on 2010–2019). "
+                        f"XGBoost booster extended with {n_new_rounds} new trees "
+                        f"(total: {xgb_clf.n_estimators})."
+                    )
+
+                except Exception as update_err:
+                    if type(update_err).__name__ in ("StopException", "RerunException"):
+                        raise
+                    st.error("❌ Incremental update failed:")
+                    st.code(traceback.format_exc(), language="python")
+
+        else:
+            st.markdown(
+                """
+                <div style='text-align:center; padding:48px 20px; color:#9ca3af;'>
+                    <div style='font-size:3.5rem'>🔄</div>
+                    <p style='margin-top:12px; font-size:1.05rem;'>
+                        Upload both the <strong>existing .pkl pipeline</strong> and a
+                        <strong>new CSV dataset (FY2020–Present)</strong> above to begin.
+                    </p>
+                    <p style='font-size:0.85rem; color:#6b7280;'>
+                        Don’t have a .pkl yet? Train a model in the ⚡ ML Models tab first,
+                        then download it from the “Save Model” section.
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
 except Exception as e:
     # Re-raise Streamlit's internal flow-control exceptions (st.stop, st.rerun)
