@@ -6,6 +6,7 @@ Converted from: SMB loans Trees.ipynb (Google Colab)
 
 import io
 import joblib
+import traceback
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -565,302 +566,310 @@ def show_threshold_analysis(y_test, y_probs):
 # ─────────────────────────────────────────────────────────────────────────────
 # Main App Flow
 # ─────────────────────────────────────────────────────────────────────────────
-if uploaded_file is None:
-    st.markdown(
-        """
-        <div style='text-align:center; padding: 60px 20px;'>
-            <div style='font-size:4rem'>📤</div>
-            <h3 style='color:#a78bfa; margin-top:12px'>Upload your SBA 7(a) CSV to get started</h3>
-            <p style='color:#9ca3af'>Use the sidebar to upload the FOIA 7(a) dataset CSV file.</p>
-            <p style='color:#6b7280; font-size:0.85rem'>Expected: <code>foia-7a-fy2010-fy2019-asof-*.csv</code></p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.stop()
-
-
-# ── Load & Clean ──────────────────────────────────────────────────────────────
-with st.spinner("🔄 Loading and cleaning data…"):
-    file_bytes = uploaded_file.read()
-    df_clean = load_and_clean(file_bytes)
-
-st.success(f"✅ Data loaded: **{len(df_clean):,} loans** after deduplication and filtering.")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TABS
-# ─────────────────────────────────────────────────────────────────────────────
-tab_portfolio, tab_geo, tab_model, tab_features = st.tabs([
-    "📊 Portfolio Overview",
-    "🗺️ Geographic Risk",
-    "🤖 ML Models",
-    "📈 Feature Importance",
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — Portfolio Overview
-# ═══════════════════════════════════════════════════════════════════════════════
-with tab_portfolio:
-    st.markdown('<div class="section-header">Portfolio Summary (FY2010–FY2019)</div>', unsafe_allow_html=True)
-
-    summary, totals, overall = build_portfolio_summary(df_clean)
-
-    # KPI row
-    kpi_cols = st.columns(4)
-    colors_kpi = {"Paid in Full": "#4ade80", "Default": "#f87171",
-                  "Non Performing": "#fb923c", "Outstanding": "#facc15"}
-    for col, (name, (amt, cnt)) in zip(kpi_cols, totals.items()):
-        col.metric(
-            label=name,
-            value=f"${amt/1e9:.2f}B",
-            delta=f"{cnt:,} loans",
-            delta_color="off",
+try:
+    if uploaded_file is None:
+        st.markdown(
+            """
+            <div style='text-align:center; padding: 60px 20px;'>
+                <div style='font-size:4rem'>📤</div>
+                <h3 style='color:#a78bfa; margin-top:12px'>Upload your SBA 7(a) CSV to get started</h3>
+                <p style='color:#9ca3af'>Use the sidebar to upload the FOIA 7(a) dataset CSV file.</p>
+                <p style='color:#6b7280; font-size:0.85rem'>Expected: <code>foia-7a-fy2010-fy2019-asof-*.csv</code></p>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-
-    st.markdown("---")
-
-    col_left, col_right = st.columns([1.1, 1])
-
-    with col_left:
-        st.markdown("**Portfolio Breakdown Table**")
-        fmt_summary = summary.copy()
-        fmt_summary["Total Amount ($)"] = fmt_summary["Total Amount ($)"].apply("${:,.0f}".format)
-        fmt_summary["% of Portfolio"]   = fmt_summary["% of Portfolio"].apply("{:.2f}%".format)
-        fmt_summary["Loan Count"]       = fmt_summary["Loan Count"].apply("{:,}".format)
-        st.dataframe(fmt_summary, use_container_width=True)
-
-    with col_right:
-        st.markdown("**Dollar Volume by Status**")
-        labels = list(totals.keys())
-        sizes  = [v[0] for v in totals.values()]
-        pie_colors = ["#4ade80", "#f87171", "#fb923c", "#facc15"]
-
-        fig_pie = go.Figure(go.Pie(
-            labels=labels, values=sizes,
-            marker=dict(colors=pie_colors, line=dict(color="#1e1b4b", width=2)),
-            textinfo="percent+label",
-            pull=[0, 0.1, 0.1, 0],
-            hole=0.35,
-        ))
-        fig_pie.update_layout(
-            title="SBA 7(a) Portfolio Breakdown",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font_color="white",
-            legend=dict(bgcolor="rgba(0,0,0,0)"),
-            margin=dict(l=10, r=10, t=50, b=10),
-        )
-        st.plotly_chart(fig_pie, use_container_width=True)
-
-    # Sector default rate chart
-    st.markdown('<div class="section-header">Default Rates by Industry Sector</div>', unsafe_allow_html=True)
-
-    df2 = df_clean.copy()
-    df2.loc[df2["loanstatus"].isin(DEFAULT_STATUSES + NON_PERFORMING), "is_default"] = 1
-    df2.loc[df2["loanstatus"].isin(PIF_STATUSES + OUTSTANDING_STATUSES), "is_default"] = 0
-    df2["naics_sector"] = df2["naicscode"].fillna(0).astype(int).astype(str).str[:2].replace("0", "Unknown")
-    df2["Sector_Description"] = df2["naics_sector"].map(NAICS_MAP)
-    df2 = df2.dropna(subset=["Sector_Description"])
-
-    sector_totals   = df2.groupby("Sector_Description")["grossapproval"].sum().reset_index(name="Total_Volume_USD")
-    sector_defaults = df2[df2["is_default"] == 1].groupby("Sector_Description")["grossapproval"].sum().reset_index(name="Default_Volume_USD")
-    sector_summary  = pd.merge(sector_totals, sector_defaults, on="Sector_Description", how="left").fillna(0)
-    sector_summary["Default_Rate_Dollar_%"] = (sector_summary["Default_Volume_USD"] / sector_summary["Total_Volume_USD"]) * 100
-    sector_summary  = sector_summary.sort_values("Default_Rate_Dollar_%", ascending=True).reset_index(drop=True)
-
-    fig_sector = px.bar(
-        sector_summary,
-        x="Default_Rate_Dollar_%", y="Sector_Description",
-        orientation="h",
-        title="<b>Dollar Volume Default Rate by Industry Sector</b>",
-        labels={"Sector_Description": "Industry Sector", "Default_Rate_Dollar_%": "Default Rate (%)"},
-        color="Default_Rate_Dollar_%",
-        color_continuous_scale="YlOrRd",
-    )
-    fig_sector.update_layout(
-        title_x=0.5, title_font_size=18,
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font_color="white",
-        yaxis={"categoryorder": "array", "categoryarray": sector_summary["Sector_Description"].tolist()},
-        coloraxis_showscale=False,
-        margin=dict(l=340, r=20, t=60, b=40),
-        height=650,
-    )
-    st.plotly_chart(fig_sector, use_container_width=True)
+        st.stop()
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — Geographic Risk
-# ═══════════════════════════════════════════════════════════════════════════════
-with tab_geo:
-    st.markdown('<div class="section-header">State-Level Default Risk</div>', unsafe_allow_html=True)
+    # ── Load & Clean ──────────────────────────────────────────────────────────────
+    with st.spinner("🔄 Loading and cleaning data…"):
+        file_bytes = uploaded_file.read()
+        df_clean = load_and_clean(file_bytes)
 
-    with st.spinner("Building state-level analysis…"):
-        state_data = build_state_summary(df_clean)
+    st.success(f"✅ Data loaded: **{len(df_clean):,} loans** after deduplication and filtering.")
 
-    # Choropleth maps
-    fig_geo = make_subplots(
-        rows=1, cols=2,
-        specs=[[{"type": "choropleth"}, {"type": "choropleth"}]],
-        subplot_titles=("<b>Count Default Rate</b>", "<b>Dollar Default Rate</b>"),
-    )
-    for col_idx, metric, cbar_x in [
-        (1, "Default_Count_%",  0.44),
-        (2, "Default_Dollar_%", 1.02),
-    ]:
-        fig_geo.add_trace(
-            go.Choropleth(
-                locations=state_data["projectstate"],
-                z=state_data[metric],
-                locationmode="USA-states",
-                colorscale="Reds",
-                colorbar_x=cbar_x,
-                colorbar_title="Rate %",
-            ),
-            row=1, col=col_idx,
-        )
-    fig_geo.update_geos(scope="usa")
-    fig_geo.update_layout(
-        title_text="<b>SBA Portfolio: Frequency vs. Severity by State</b>",
-        title_font_size=18, title_x=0.5,
-        paper_bgcolor="rgba(0,0,0,0)", font_color="white",
-        height=520,
-    )
-    st.plotly_chart(fig_geo, use_container_width=True)
-
-    # Table — top risky states
-    st.markdown('<div class="section-header">Top 10 Highest Default Rate States</div>', unsafe_allow_html=True)
-    disp_cols = ["projectstate", "Default_Count_%", "Default_Dollar_%",
-                 "Total_State_Loans", "Total_State_Amount_USD"]
-    disp = state_data[disp_cols].head(10).rename(columns={
-        "projectstate":        "State",
-        "Default_Count_%":     "Count Default %",
-        "Default_Dollar_%":    "Dollar Default %",
-        "Total_State_Loans":   "Total Loans",
-        "Total_State_Amount_USD": "Total Volume ($)",
-    })
-    disp["Count Default %"]  = disp["Count Default %"].round(2)
-    disp["Dollar Default %"] = disp["Dollar Default %"].round(2)
-    disp["Total Volume ($)"] = disp["Total Volume ($)"].apply("${:,.0f}".format)
-    st.dataframe(disp.set_index("State"), use_container_width=True)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # TABS
+    # ─────────────────────────────────────────────────────────────────────────────
+    tab_portfolio, tab_geo, tab_model, tab_features = st.tabs([
+        "📊 Portfolio Overview",
+        "🗺️ Geographic Risk",
+        "🤖 ML Models",
+        "📈 Feature Importance",
+    ])
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — ML Models
-# ═══════════════════════════════════════════════════════════════════════════════
-with tab_model:
-    st.markdown('<div class="section-header">Machine Learning Pipeline</div>', unsafe_allow_html=True)
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # TAB 1 — Portfolio Overview
+    # ═══════════════════════════════════════════════════════════════════════════════
+    with tab_portfolio:
+        st.markdown('<div class="section-header">Portfolio Summary (FY2010–FY2019)</div>', unsafe_allow_html=True)
 
-    with st.spinner("🔧 Engineering features…"):
-        X, y = engineer_features(df_clean)
+        summary, totals, overall = build_portfolio_summary(df_clean)
 
-    st.info(f"**Feature matrix:** {X.shape[0]:,} rows × {X.shape[1]} columns | "
-            f"**Default rate:** {y.mean()*100:.2f}%")
+        # KPI row
+        kpi_cols = st.columns(4)
+        colors_kpi = {"Paid in Full": "#4ade80", "Default": "#f87171",
+                      "Non Performing": "#fb923c", "Outstanding": "#facc15"}
+        for col, (name, (amt, cnt)) in zip(kpi_cols, totals.items()):
+            col.metric(
+                label=name,
+                value=f"${amt/1e9:.2f}B",
+                delta=f"{cnt:,} loans",
+                delta_color="off",
+            )
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, stratify=y, random_state=42
-    )
-
-    best_probs_for_threshold = None
-    best_pipeline_for_download = None
-
-    # ── Random Forest ────────────────────────────────────────────────────────
-    if run_rf:
         st.markdown("---")
-        st.markdown("### 🌲 Random Forest")
-        with st.spinner("Training Random Forest (150 trees, max_depth=12)…"):
-            rf_pipeline = train_rf(X_train, y_train)
-        rf_probs = show_model_results("Random Forest", rf_pipeline, X_test, y_test, "Greens")
 
-    # ── XGBoost (base) ───────────────────────────────────────────────────────
-    if run_xgb:
-        st.markdown("---")
-        st.markdown("### ⚡ XGBoost (Base)")
-        with st.spinner("Training XGBoost (200 rounds, lr=0.1)…"):
-            xgb_pipeline = train_xgb(X_train, y_train)
-        xgb_probs = show_model_results("XGBoost", xgb_pipeline, X_test, y_test, "Blues")
-        best_probs_for_threshold = xgb_probs
-        best_pipeline_for_download = xgb_pipeline
+        col_left, col_right = st.columns([1.1, 1])
 
-    # ── Tuned XGBoost ────────────────────────────────────────────────────────
-    if run_tuned:
-        st.markdown("---")
-        st.markdown("### 🔬 Tuned XGBoost (RandomizedSearchCV)")
-        with st.spinner("Running hyperparameter search (this may take several minutes)…"):
-            tuned_pipe, best_params, best_cv_score = train_tuned_xgb(X_train, y_train)
-        st.success(f"Best CV ROC-AUC: **{best_cv_score:.4f}**")
-        with st.expander("Best Hyperparameters"):
-            st.json({k.replace("classifier__", ""): v for k, v in best_params.items()})
-        tuned_probs = show_model_results("Tuned XGBoost", tuned_pipe, X_test, y_test, "Purp")
-        best_probs_for_threshold = tuned_probs
-        best_pipeline_for_download = tuned_pipe
+        with col_left:
+            st.markdown("**Portfolio Breakdown Table**")
+            fmt_summary = summary.copy()
+            fmt_summary["Total Amount ($)"] = fmt_summary["Total Amount ($)"].apply("${:,.0f}".format)
+            fmt_summary["% of Portfolio"]   = fmt_summary["% of Portfolio"].apply("{:.2f}%".format)
+            fmt_summary["Loan Count"]       = fmt_summary["Loan Count"].apply("{:,}".format)
+            st.dataframe(fmt_summary, use_container_width=True)
 
-    # ── Threshold Analysis ───────────────────────────────────────────────────
-    if best_probs_for_threshold is not None:
-        st.markdown("---")
-        st.markdown("### 🎯 Optimal Decision Threshold")
-        opt_threshold = show_threshold_analysis(y_test, best_probs_for_threshold)
+        with col_right:
+            st.markdown("**Dollar Volume by Status**")
+            labels = list(totals.keys())
+            sizes  = [v[0] for v in totals.values()]
+            pie_colors = ["#4ade80", "#f87171", "#fb923c", "#facc15"]
 
-    # ── Download Model ───────────────────────────────────────────────────────
-    if best_pipeline_for_download is not None:
-        st.markdown("---")
-        st.markdown("### 💾 Save Model")
-        buffer = io.BytesIO()
-        joblib.dump(best_pipeline_for_download, buffer)
-        buffer.seek(0)
-        st.download_button(
-            label="⬇️ Download Trained Pipeline (.pkl)",
-            data=buffer,
-            file_name="sba_loan_xgboost_pipeline.pkl",
-            mime="application/octet-stream",
-        )
+            fig_pie = go.Figure(go.Pie(
+                labels=labels, values=sizes,
+                marker=dict(colors=pie_colors, line=dict(color="#1e1b4b", width=2)),
+                textinfo="percent+label",
+                pull=[0, 0.1, 0.1, 0],
+                hole=0.35,
+            ))
+            fig_pie.update_layout(
+                title="SBA 7(a) Portfolio Breakdown",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font_color="white",
+                legend=dict(bgcolor="rgba(0,0,0,0)"),
+                margin=dict(l=10, r=10, t=50, b=10),
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
 
-    if not run_rf and not run_xgb and not run_tuned:
-        st.warning("Enable at least one model in the sidebar to train.")
+        # Sector default rate chart
+        st.markdown('<div class="section-header">Default Rates by Industry Sector</div>', unsafe_allow_html=True)
 
+        df2 = df_clean.copy()
+        df2.loc[df2["loanstatus"].isin(DEFAULT_STATUSES + NON_PERFORMING), "is_default"] = 1
+        df2.loc[df2["loanstatus"].isin(PIF_STATUSES + OUTSTANDING_STATUSES), "is_default"] = 0
+        df2["naics_sector"] = df2["naicscode"].fillna(0).astype(int).astype(str).str[:2].replace("0", "Unknown")
+        df2["Sector_Description"] = df2["naics_sector"].map(NAICS_MAP)
+        df2 = df2.dropna(subset=["Sector_Description"])
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — Feature Importance
-# ═══════════════════════════════════════════════════════════════════════════════
-with tab_features:
-    st.markdown('<div class="section-header">XGBoost Feature Importance</div>', unsafe_allow_html=True)
+        sector_totals   = df2.groupby("Sector_Description")["grossapproval"].sum().reset_index(name="Total_Volume_USD")
+        sector_defaults = df2[df2["is_default"] == 1].groupby("Sector_Description")["grossapproval"].sum().reset_index(name="Default_Volume_USD")
+        sector_summary  = pd.merge(sector_totals, sector_defaults, on="Sector_Description", how="left").fillna(0)
+        sector_summary["Default_Rate_Dollar_%"] = (sector_summary["Default_Volume_USD"] / sector_summary["Total_Volume_USD"]) * 100
+        sector_summary  = sector_summary.sort_values("Default_Rate_Dollar_%", ascending=True).reset_index(drop=True)
 
-    if not run_xgb:
-        st.warning("Enable **Train XGBoost (base)** in the sidebar to see feature importance.")
-    else:
-        with st.spinner("Training XGBoost for feature importance…"):
-            _X, _y = engineer_features(df_clean)
-            _Xtr, _Xte, _ytr, _yte = train_test_split(_X, _y, test_size=0.2, stratify=_y, random_state=42)
-            xgb_pipe = train_xgb(_Xtr, _ytr)
-
-        trained_xgb = xgb_pipe.named_steps["classifier"]
-        importance_df = pd.DataFrame({
-            "Feature":    NUMERIC_FEATURES + CATEGORICAL_FEATURES + PASSTHROUGH_FEATURES,
-            "Importance": trained_xgb.feature_importances_,
-        }).sort_values("Importance", ascending=True)
-
-        fig_imp = px.bar(
-            importance_df,
-            x="Importance", y="Feature",
+        fig_sector = px.bar(
+            sector_summary,
+            x="Default_Rate_Dollar_%", y="Sector_Description",
             orientation="h",
-            title="<b>XGBoost Feature Importance (Gain)</b>",
-            labels={"Importance": "Relative Importance (Gain)", "Feature": "Loan Feature"},
-            color="Importance",
-            color_continuous_scale="Viridis",
-            height=700,
+            title="<b>Dollar Volume Default Rate by Industry Sector</b>",
+            labels={"Sector_Description": "Industry Sector", "Default_Rate_Dollar_%": "Default Rate (%)"},
+            color="Default_Rate_Dollar_%",
+            color_continuous_scale="YlOrRd",
         )
-        fig_imp.update_layout(
+        fig_sector.update_layout(
             title_x=0.5, title_font_size=18,
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             font_color="white",
-            showlegend=False,
-            margin=dict(l=220, r=20, t=60, b=40),
-            yaxis={"categoryorder": "array", "categoryarray": importance_df["Feature"].tolist()},
+            yaxis={"categoryorder": "array", "categoryarray": sector_summary["Sector_Description"].tolist()},
+            coloraxis_showscale=False,
+            margin=dict(l=340, r=20, t=60, b=40),
+            height=650,
         )
-        st.plotly_chart(fig_imp, use_container_width=True)
+        st.plotly_chart(fig_sector, use_container_width=True)
 
-        with st.expander("📋 Raw Importance Scores"):
-            st.dataframe(
-                importance_df.sort_values("Importance", ascending=False).reset_index(drop=True),
-                use_container_width=True,
+
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # TAB 2 — Geographic Risk
+    # ═══════════════════════════════════════════════════════════════════════════════
+    with tab_geo:
+        st.markdown('<div class="section-header">State-Level Default Risk</div>', unsafe_allow_html=True)
+
+        with st.spinner("Building state-level analysis…"):
+            state_data = build_state_summary(df_clean)
+
+        # Choropleth maps
+        fig_geo = make_subplots(
+            rows=1, cols=2,
+            specs=[[{"type": "choropleth"}, {"type": "choropleth"}]],
+            subplot_titles=("<b>Count Default Rate</b>", "<b>Dollar Default Rate</b>"),
+        )
+        for col_idx, metric, cbar_x in [
+            (1, "Default_Count_%",  0.44),
+            (2, "Default_Dollar_%", 1.02),
+        ]:
+            fig_geo.add_trace(
+                go.Choropleth(
+                    locations=state_data["projectstate"],
+                    z=state_data[metric],
+                    locationmode="USA-states",
+                    colorscale="Reds",
+                    colorbar_x=cbar_x,
+                    colorbar_title="Rate %",
+                ),
+                row=1, col=col_idx,
             )
+        fig_geo.update_geos(scope="usa")
+        fig_geo.update_layout(
+            title_text="<b>SBA Portfolio: Frequency vs. Severity by State</b>",
+            title_font_size=18, title_x=0.5,
+            paper_bgcolor="rgba(0,0,0,0)", font_color="white",
+            height=520,
+        )
+        st.plotly_chart(fig_geo, use_container_width=True)
+
+        # Table — top risky states
+        st.markdown('<div class="section-header">Top 10 Highest Default Rate States</div>', unsafe_allow_html=True)
+        disp_cols = ["projectstate", "Default_Count_%", "Default_Dollar_%",
+                     "Total_State_Loans", "Total_State_Amount_USD"]
+        disp = state_data[disp_cols].head(10).rename(columns={
+            "projectstate":        "State",
+            "Default_Count_%":     "Count Default %",
+            "Default_Dollar_%":    "Dollar Default %",
+            "Total_State_Loans":   "Total Loans",
+            "Total_State_Amount_USD": "Total Volume ($)",
+        })
+        disp["Count Default %"]  = disp["Count Default %"].round(2)
+        disp["Dollar Default %"] = disp["Dollar Default %"].round(2)
+        disp["Total Volume ($)"] = disp["Total Volume ($)"].apply("${:,.0f}".format)
+        st.dataframe(disp.set_index("State"), use_container_width=True)
+
+
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # TAB 3 — ML Models
+    # ═══════════════════════════════════════════════════════════════════════════════
+    with tab_model:
+        st.markdown('<div class="section-header">Machine Learning Pipeline</div>', unsafe_allow_html=True)
+
+        with st.spinner("🔧 Engineering features…"):
+            X, y = engineer_features(df_clean)
+
+        st.info(f"**Feature matrix:** {X.shape[0]:,} rows × {X.shape[1]} columns | "
+                f"**Default rate:** {y.mean()*100:.2f}%")
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, stratify=y, random_state=42
+        )
+
+        best_probs_for_threshold = None
+        best_pipeline_for_download = None
+
+        # ── Random Forest ────────────────────────────────────────────────────────
+        if run_rf:
+            st.markdown("---")
+            st.markdown("### 🌲 Random Forest")
+            with st.spinner("Training Random Forest (150 trees, max_depth=12)…"):
+                rf_pipeline = train_rf(X_train, y_train)
+            rf_probs = show_model_results("Random Forest", rf_pipeline, X_test, y_test, "Greens")
+
+        # ── XGBoost (base) ───────────────────────────────────────────────────────
+        if run_xgb:
+            st.markdown("---")
+            st.markdown("### ⚡ XGBoost (Base)")
+            with st.spinner("Training XGBoost (200 rounds, lr=0.1)…"):
+                xgb_pipeline = train_xgb(X_train, y_train)
+            xgb_probs = show_model_results("XGBoost", xgb_pipeline, X_test, y_test, "Blues")
+            best_probs_for_threshold = xgb_probs
+            best_pipeline_for_download = xgb_pipeline
+
+        # ── Tuned XGBoost ────────────────────────────────────────────────────────
+        if run_tuned:
+            st.markdown("---")
+            st.markdown("### 🔬 Tuned XGBoost (RandomizedSearchCV)")
+            with st.spinner("Running hyperparameter search (this may take several minutes)…"):
+                tuned_pipe, best_params, best_cv_score = train_tuned_xgb(X_train, y_train)
+            st.success(f"Best CV ROC-AUC: **{best_cv_score:.4f}**")
+            with st.expander("Best Hyperparameters"):
+                st.json({k.replace("classifier__", ""): v for k, v in best_params.items()})
+            tuned_probs = show_model_results("Tuned XGBoost", tuned_pipe, X_test, y_test, "Purp")
+            best_probs_for_threshold = tuned_probs
+            best_pipeline_for_download = tuned_pipe
+
+        # ── Threshold Analysis ───────────────────────────────────────────────────
+        if best_probs_for_threshold is not None:
+            st.markdown("---")
+            st.markdown("### 🎯 Optimal Decision Threshold")
+            opt_threshold = show_threshold_analysis(y_test, best_probs_for_threshold)
+
+        # ── Download Model ───────────────────────────────────────────────────────
+        if best_pipeline_for_download is not None:
+            st.markdown("---")
+            st.markdown("### 💾 Save Model")
+            buffer = io.BytesIO()
+            joblib.dump(best_pipeline_for_download, buffer)
+            buffer.seek(0)
+            st.download_button(
+                label="⬇️ Download Trained Pipeline (.pkl)",
+                data=buffer,
+                file_name="sba_loan_xgboost_pipeline.pkl",
+                mime="application/octet-stream",
+            )
+
+        if not run_rf and not run_xgb and not run_tuned:
+            st.warning("Enable at least one model in the sidebar to train.")
+
+
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # TAB 4 — Feature Importance
+    # ═══════════════════════════════════════════════════════════════════════════════
+    with tab_features:
+        st.markdown('<div class="section-header">XGBoost Feature Importance</div>', unsafe_allow_html=True)
+
+        if not run_xgb:
+            st.warning("Enable **Train XGBoost (base)** in the sidebar to see feature importance.")
+        else:
+            with st.spinner("Training XGBoost for feature importance…"):
+                _X, _y = engineer_features(df_clean)
+                _Xtr, _Xte, _ytr, _yte = train_test_split(_X, _y, test_size=0.2, stratify=_y, random_state=42)
+                xgb_pipe = train_xgb(_Xtr, _ytr)
+
+            trained_xgb = xgb_pipe.named_steps["classifier"]
+            importance_df = pd.DataFrame({
+                "Feature":    NUMERIC_FEATURES + CATEGORICAL_FEATURES + PASSTHROUGH_FEATURES,
+                "Importance": trained_xgb.feature_importances_,
+            }).sort_values("Importance", ascending=True)
+
+            fig_imp = px.bar(
+                importance_df,
+                x="Importance", y="Feature",
+                orientation="h",
+                title="<b>XGBoost Feature Importance (Gain)</b>",
+                labels={"Importance": "Relative Importance (Gain)", "Feature": "Loan Feature"},
+                color="Importance",
+                color_continuous_scale="Viridis",
+                height=700,
+            )
+            fig_imp.update_layout(
+                title_x=0.5, title_font_size=18,
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font_color="white",
+                showlegend=False,
+                margin=dict(l=220, r=20, t=60, b=40),
+                yaxis={"categoryorder": "array", "categoryarray": importance_df["Feature"].tolist()},
+            )
+            st.plotly_chart(fig_imp, use_container_width=True)
+
+            with st.expander("📋 Raw Importance Scores"):
+                st.dataframe(
+                    importance_df.sort_values("Importance", ascending=False).reset_index(drop=True),
+                    use_container_width=True,
+                )
+
+except Exception as e:
+    # Re-raise Streamlit's internal flow-control exceptions (st.stop, st.rerun)
+    if type(e).__name__ in ("StopException", "RerunException"):
+        raise
+    st.error("🚨 **An unexpected error occurred while running the app:**")
+    st.code(traceback.format_exc(), language="python")
