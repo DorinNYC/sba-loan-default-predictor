@@ -46,33 +46,34 @@ st.markdown(
 
     html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
-    /* Dark gradient background */
+    /* Light gradient background */
     .stApp {
-        background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
-        color: #e8e8f0;
+        background: linear-gradient(135deg, #eef2ff, #f5f3ff, #ede9fe);
+        color: #1e1b4b;
     }
 
     /* Sidebar */
     [data-testid="stSidebar"] {
-        background: rgba(255,255,255,0.05);
+        background: rgba(255,255,255,0.75);
         backdrop-filter: blur(12px);
-        border-right: 1px solid rgba(255,255,255,0.1);
+        border-right: 1px solid rgba(124,58,237,0.15);
     }
 
     /* Metric cards */
     [data-testid="metric-container"] {
-        background: rgba(255,255,255,0.07);
-        border: 1px solid rgba(255,255,255,0.12);
+        background: rgba(255,255,255,0.85);
+        border: 1px solid rgba(124,58,237,0.18);
         border-radius: 12px;
         padding: 16px;
         backdrop-filter: blur(8px);
+        box-shadow: 0 2px 12px rgba(124,58,237,0.07);
     }
 
     /* Section headers */
     .section-header {
         font-size: 1.4rem;
         font-weight: 700;
-        color: #a78bfa;
+        color: #6d28d9;
         border-left: 4px solid #7c3aed;
         padding-left: 12px;
         margin: 28px 0 16px 0;
@@ -80,15 +81,15 @@ st.markdown(
 
     /* Hero banner */
     .hero-banner {
-        background: linear-gradient(90deg, rgba(124,58,237,0.3), rgba(59,130,246,0.3));
-        border: 1px solid rgba(124,58,237,0.4);
+        background: linear-gradient(90deg, rgba(124,58,237,0.12), rgba(59,130,246,0.12));
+        border: 1px solid rgba(124,58,237,0.3);
         border-radius: 16px;
         padding: 32px 40px;
         margin-bottom: 28px;
         text-align: center;
     }
-    .hero-banner h1 { font-size: 2.4rem; font-weight: 700; color: #ffffff; margin: 0; }
-    .hero-banner p  { font-size: 1.05rem; color: #c4b5fd; margin: 8px 0 0; }
+    .hero-banner h1 { font-size: 2.4rem; font-weight: 700; color: #3b0764; margin: 0; }
+    .hero-banner p  { font-size: 1.05rem; color: #6d28d9; margin: 8px 0 0; }
 
     /* Step badge */
     .step-badge {
@@ -104,8 +105,8 @@ st.markdown(
 
     /* Upload box */
     [data-testid="stFileUploader"] {
-        background: rgba(255,255,255,0.05);
-        border: 2px dashed rgba(124,58,237,0.5);
+        background: rgba(255,255,255,0.7);
+        border: 2px dashed rgba(124,58,237,0.4);
         border-radius: 12px;
         padding: 8px;
     }
@@ -124,14 +125,15 @@ st.markdown(
 
     /* Tabs */
     .stTabs [data-baseweb="tab-list"] {
-        background: rgba(255,255,255,0.05);
+        background: rgba(255,255,255,0.6);
         border-radius: 10px;
         gap: 4px;
         padding: 4px;
+        border: 1px solid rgba(124,58,237,0.15);
     }
     .stTabs [data-baseweb="tab"] {
         border-radius: 8px;
-        color: #c4b5fd;
+        color: #6d28d9;
         font-weight: 500;
     }
     .stTabs [aria-selected="true"] {
@@ -143,7 +145,7 @@ st.markdown(
     [data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; }
 
     /* Divider */
-    hr { border-color: rgba(255,255,255,0.1); }
+    hr { border-color: rgba(124,58,237,0.15); }
 
     /* Info/success/warning boxes */
     .stAlert { border-radius: 10px; }
