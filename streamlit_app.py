@@ -364,7 +364,7 @@ def engineer_features(_df: pd.DataFrame):
 
 def build_preprocessor():
     return ColumnTransformer(
-        transformers=[("cat", TargetEncoder(cv=5, random_state=42), CATEGORICAL_FEATURES)],
+        transformers=[("cat", TargetEncoder(cv=5), CATEGORICAL_FEATURES)],
         remainder="passthrough",
     )
 
