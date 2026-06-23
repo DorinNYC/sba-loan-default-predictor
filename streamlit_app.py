@@ -605,7 +605,7 @@ try:
     # TAB 1 — Portfolio Overview
     # ═══════════════════════════════════════════════════════════════════════════════
     with tab_portfolio:
-        st.markdown('<div class="section-header">Portfolio Summary (FY2010–FY2019)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-header">Portfolio Summary </div>', unsafe_allow_html=True)
 
         summary, totals, overall = build_portfolio_summary(df_clean)
 
